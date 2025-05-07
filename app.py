@@ -17,6 +17,9 @@ from six.moves import queue
 from threading import Thread
 from gevent import pywsgi
 from geventwebsocket.handler import WebSocketHandler
+import os
+os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "/home/ayan/Documents/stt_creds.json"
+
 
 app = Flask(__name__)
 sockets = Sockets(app)
