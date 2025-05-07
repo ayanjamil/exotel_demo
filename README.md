@@ -46,4 +46,6 @@ optional arguments:
 
 conda activate exotel-stream
 python app.py --port 8000 --stream_type bidirectional
-ngrok http 8000
+ngrok http 8000 => https://1106-2409-40e4-1310-3439-f182-dbb4-d73b-460a.ngrok-free.app
+
+Url in exotel - wss://39be-2409-40e4-1310-3439-f182-dbb4-d73b-460a.ngrok-free.app/media
