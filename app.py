@@ -3,7 +3,7 @@ import re
 import sys
 import argparse
 import time
-
+import os
 from google.cloud import speech_v1p1beta1 as speech
 import base64
 import json
@@ -11,15 +11,23 @@ import signal
 import logging
 import threading
 
+from elevenlabs_client import ElevenLabsClient
 from flask import Flask
 from flask_sockets import Sockets
 from six.moves import queue
 from threading import Thread
 from gevent import pywsgi
-from geventwebsocket.handler import WebSocketHandler
+from geventwebsocket.handler import WebSocketHandler    
+
+from dotenv import load_dotenv
+load_dotenv()
+
+ELEVEN_LABS_AGENT_ID = os.getenv('ELEVENLABS_AGENT_ID')
+ELEVEN_LABS_API_KEYS = os.getenv('ELEVENLABS_API_KEY')
 
 app = Flask(__name__)
 sockets = Sockets(app)
+app.logger.setLevel(logging.DEBUG)
 
 def signal_handler(sig, frame):
     sys.exit(0)
@@ -128,47 +136,49 @@ class Stream(object):
 
             yield b"".join(data)
 
+def send_to_exotel(audio_chunk):
+    if exotel_ws and current_sid:
+        payload = {
+            'event': 'media',
+            'stream_sid': current_sid,
+            'media': {
+                'payload': base64.b64encode(audio_chunk).decode("ascii")
+            }
+        }
+        exotel_ws.send(json.dumps(payload))
+
+current_sid = None
+exotel_ws = None
+agent_id = ELEVEN_LABS_AGENT_ID
+api_key = ELEVEN_LABS_API_KEYS
+elevenlabs = ElevenLabsClient(agent_id, api_key, send_to_exotel)
+elevenlabs.connect()
+
 @sockets.route('/media')
-def echo(ws):
-    app.logger.info("Connection accepted")
-    # A lot of messages will be sent rapidly. We'll stop showing after the first one.
-    has_seen_media = False
-    message_count = 0
+def handle_exotel(ws):
+    global current_sid, exotel_ws
+    exotel_ws = ws
+
     while not ws.closed:
-        message = ws.receive()
-        if message is None:
-            app.logger.info("No message received...")
+        msg = ws.receive()
+        if msg is None:
             continue
 
-        # Messages are a JSON encoded string
-        data = json.loads(message)
+        data = json.loads(msg)
+        event = data.get("event")
 
-        # Using the event type you can determine what type of message you are receiving
-        if data['event'] == "connected":
-            app.logger.info("Connected Message received: {}".format(message))
-        if data['event'] == "start":
-            app.logger.info("Start Message received: {}".format(message))
-        if data['event'] == "media":
-            payload = data['media']['payload']
+        if event == "start":
+            current_sid = data.get("stream_sid")
+
+        elif event == "media":
+            payload = data["media"]["payload"]
             chunk = base64.b64decode(payload)
-            stream.fill_buffer(chunk)
-            if not has_seen_media and args.stream_type == "bidirectional":
-                t2 = threading.Thread(target=stream_playback, args=(ws, data['stream_sid']))
-                t2.daemon = True
-                t2.start()
-                app.logger.info("Media message: {}".format(message))
-                app.logger.info("Payload is: {}".format(payload))
-                app.logger.info("That's {} bytes".format(len(chunk)))
-                app.logger.info("Additional media messages from WebSocket are being suppressed....")
-                has_seen_media = True
-        if data['event'] == "mark":
-            app.logger.info("Mark Message received: {}".format(message))
-        if data['event'] == "stop":
-            app.logger.info("Stop Message received: {}".format(message))
-            break
-        message_count += 1
+            elevenlabs.send_audio(chunk)
 
-    app.logger.info("Connection closed. Received a total of {} messages".format(message_count))
+        elif event == "stop":
+            break
+
+
 
 def stream_transcript():
     while True:
